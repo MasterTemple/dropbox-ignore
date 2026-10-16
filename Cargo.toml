@@ -1,0 +1,26 @@
+[package]
+name = "dropbox-ignore"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "Keep files out of Dropbox with .gitignore-style .dropboxignore rules, and see what Dropbox is tracking"
+keywords = ["dropbox", "dropboxignore", "cli"]
+categories = ["command-line-utilities", "filesystem"]
+readme = "README.md"
+
+[[bin]]
+name = "di"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive", "env", "wrap_help"] }
+ignore = { version = "0.4.33", default-features = false }
+owo-colors = "4.4.0"
+serde_json = "1.0.154"
+unicode-width = "0.2.2"
+xattr = { version = "1.6.1", default-features = false, features = ["unsupported"] }
+
+[profile.release]
+lto = true
+strip = true
