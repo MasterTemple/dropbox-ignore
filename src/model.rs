@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 
 use crate::{
     dropbox::{self, Dropbox, SyncStatus},
@@ -172,4 +173,75 @@ impl Target {
         let parent = self.path.parent().unwrap_or(&self.path);
         Rules::for_dir(parent, self.dropbox_root.as_deref())
     }
+}
+
+/// One directory entry, classified.
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub name: String,
+    pub path: PathBuf,
+    pub kind: Kind,
+    pub state: State,
+}
+
+/// Which entries to show when listing folders.
+#[derive(Clone)]
+pub struct Filter {
+    pub show_dotfiles: bool,
+    pub dirs_only: bool,
+    hide: GlobSet,
+}
+
+impl Filter {
+    /// `hide` holds globs matched against entry names, e.g. `.git` or `*.swp`.
+    pub fn new(show_dotfiles: bool, dirs_only: bool, hide: &[String]) -> Result<Self> {
+        let mut set = GlobSetBuilder::new();
+        for pattern in hide.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+            // allow `.git/` to mean the folder, like in ignore files
+            let glob = Glob::new(pattern.trim_end_matches('/'))
+                .with_context(|| format!("invalid --hide pattern `{pattern}`"))?;
+            set.add(glob);
+        }
+        Ok(Self {
+            show_dotfiles,
+            dirs_only,
+            hide: set.build()?,
+        })
+    }
+
+    pub fn allows(&self, name: &str, kind: &Kind) -> bool {
+        (self.show_dotfiles || !name.starts_with('.'))
+            && (!self.dirs_only || kind.is_dir())
+            && !self.hide.is_match(name)
+    }
+}
+
+/// The visible children of `dir`, folders first, plus how many were filtered out.
+pub fn list_children(
+    dir: &Path,
+    rules: &Rules,
+    dropbox: &mut Dropbox,
+    filter: &Filter,
+) -> std::io::Result<(Vec<Node>, usize)> {
+    let mut nodes = Vec::new();
+    let mut filtered = 0;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        let kind = Kind::of(&path);
+        if !filter.allows(&name, &kind) {
+            filtered += 1;
+            continue;
+        }
+        let state = State::classify(&path, kind.is_dir(), rules, dropbox);
+        nodes.push(Node {
+            name,
+            path,
+            kind,
+            state,
+        });
+    }
+    nodes.sort_by_cached_key(|n| (!n.kind.is_dir(), n.name.to_lowercase()));
+    Ok((nodes, filtered))
 }

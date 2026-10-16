@@ -1,7 +1,9 @@
 mod commands;
 mod dropbox;
 mod model;
+mod plan;
 mod rules;
+mod tui;
 mod ui;
 
 use std::process::ExitCode;
@@ -12,6 +14,7 @@ use clap::{
 };
 
 use commands::{check::CheckArgs, mark::MarkArgs, status::StatusArgs, tree::TreeArgs};
+use tui::TuiArgs;
 use ui::{ColorChoice, IconSet};
 
 const STYLES: Styles = Styles::styled()
@@ -30,6 +33,7 @@ Examples:
   di tree -L 2                  Show what Dropbox syncs in this folder
   di status target              Explain why a path is (not) synced
   di ignore node_modules        Stop syncing a folder right now
+  di tui                        Browse and fix things interactively
 
 Rules use .gitignore syntax and can live in any folder inside Dropbox.";
 
@@ -71,11 +75,20 @@ enum Command {
 
     /// Resume syncing files or folders
     Unignore(MarkArgs),
+
+    /// Browse interactively: see sync status, ignore, unignore and edit rules
+    Tui(TuiArgs),
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    ui::init(cli.color, cli.icons);
+    // the TUI styles its own output; ANSI codes in shared strings would corrupt it
+    let color = if matches!(cli.command, Command::Tui(_)) {
+        ColorChoice::Never
+    } else {
+        cli.color
+    };
+    ui::init(color, cli.icons);
 
     let result = match cli.command {
         Command::Check(args) => commands::check::run(args),
@@ -83,6 +96,7 @@ fn main() -> ExitCode {
         Command::Status(args) => commands::status::run(args),
         Command::Ignore(args) => commands::mark::run(args, true),
         Command::Unignore(args) => commands::mark::run(args, false),
+        Command::Tui(args) => tui::run(args),
     };
 
     match result {

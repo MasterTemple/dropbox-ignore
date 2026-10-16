@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     dropbox::{Dropbox, SyncStatus},
-    model::{State, Target, daemon_mark},
+    model::{Filter, Node, State, Target, daemon_mark, list_children},
     rules::Rules,
     ui::{self, Kind, Mark},
 };
@@ -35,6 +35,16 @@ pub struct TreeArgs {
     #[arg(long)]
     no_hidden: bool,
 
+    /// Hide entries whose name matches GLOB (repeatable, or comma-separated in DI_HIDE)
+    #[arg(
+        short = 'I',
+        long = "hide",
+        value_name = "GLOB",
+        env = "DI_HIDE",
+        value_delimiter = ','
+    )]
+    hide: Vec<String>,
+
     /// Skip asking the Dropbox daemon for sync status (faster)
     #[arg(long)]
     no_sync: bool,
@@ -52,6 +62,7 @@ struct Counts {
     ignored: u64,
     ignored_manual: u64,
     pending: u64,
+    filtered: u64,
 }
 
 impl Counts {
@@ -75,15 +86,9 @@ impl Counts {
     }
 }
 
-struct Node {
-    name: String,
-    path: PathBuf,
-    kind: Kind,
-    state: State,
-}
-
 struct Tree<'a> {
     args: &'a TreeArgs,
+    filter: Filter,
     dropbox: Dropbox,
     base: PathBuf,
     counts: Counts,
@@ -91,12 +96,14 @@ struct Tree<'a> {
 }
 
 pub fn run(args: TreeArgs) -> Result<()> {
+    let filter = Filter::new(!args.no_hidden, args.dirs_only, &args.hide)?;
     let mut dropbox = Dropbox::discover(!args.no_sync);
     let target = Target::resolve(&args.path, &mut dropbox)?;
     let daemon_status = dropbox.daemon_status();
 
     let mut tree = Tree {
         args: &args,
+        filter,
         dropbox,
         base: target.path.clone(),
         counts: Counts::default(),
@@ -190,27 +197,8 @@ impl Tree<'_> {
     }
 
     fn read_children(&mut self, dir: &Path, rules: &Rules) -> std::io::Result<Vec<Node>> {
-        let mut nodes = Vec::new();
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if self.args.no_hidden && name.starts_with('.') {
-                continue;
-            }
-            let path = entry.path();
-            let kind = Kind::of(&path);
-            if self.args.dirs_only && !kind.is_dir() {
-                continue;
-            }
-            let state = State::classify(&path, kind.is_dir(), rules, &mut self.dropbox);
-            nodes.push(Node {
-                name,
-                path,
-                kind,
-                state,
-            });
-        }
-        nodes.sort_by_cached_key(|n| (!n.kind.is_dir(), n.name.to_lowercase()));
+        let (nodes, filtered) = list_children(dir, rules, &mut self.dropbox, &self.filter)?;
+        self.counts.filtered += filtered as u64;
         Ok(nodes)
     }
 
@@ -243,6 +231,9 @@ impl Tree<'_> {
             totals.push(ui::plural(c.files, "file", "files"));
         }
         let mut line = ui::bold(totals.join(", "));
+        if c.filtered > 0 {
+            line.push_str(&ui::dim(format!(" ({} hidden)", ui::thousands(c.filtered))));
+        }
         if let Some(status) = daemon_status {
             line.push_str(&format!(
                 "  {}  {} {}",

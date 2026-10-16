@@ -23,6 +23,7 @@ node_modules/
 | `status [PATH...]` (alias `st`) | Shows each path's tracking state, sync status, the rule that matches it, and its Dropbox folder. |
 | `ignore PATH...` | Ignores paths right away. Use `-r` to include everything inside, and `--dry-run` to preview. |
 | `unignore PATH...` | Syncs paths again. Warns you if a rule will re-ignore them on the next `check`. |
+| `tui [PATH]` | Opens an interactive browser for the tree, with live sync status, ignore/unignore, add-rule, editing and check. Press `?` for keys. |
 
 ```
 $ di tree
@@ -40,6 +41,36 @@ $ di tree
 
 `tree` never descends into untracked folders, because Dropbox ignores everything
 inside them.
+
+### Hiding entries
+
+`tree` and `tui` take `-I, --hide <GLOB>` to leave out entries by name. The entries
+still sync; they just aren't shown. Repeat the flag or set it permanently:
+
+```sh
+di tree -I .git -I '*.swp'
+export DI_HIDE='.git,node_modules'   # comma-separated, in your shell profile
+```
+
+`--no-hidden` hides every dotfile instead.
+
+## TUI
+
+`di tui` shows the same tree, with a details pane for the selected entry. Sync status
+refreshes every 1.5 seconds.
+
+| Key | Action |
+| --- | --- |
+| `↑↓` / `jk`, `→` / `l` / `enter`, `←` / `h`, `space` | move, open, close, toggle |
+| `i` / `u` | ignore / unignore the selected entry |
+| `a` | add an anchored rule (e.g. `/build/`) to the folder's `.dropboxignore` and ignore the entry |
+| `e` | edit the relevant `.dropboxignore` in `$VISUAL` / `$EDITOR`, then reload |
+| `c` | preview everything `check` would change, then apply it with `y` |
+| `/`, `n`, `N` | find among visible entries |
+| `.`, `D`, `r` | toggle dotfiles, toggle details, refresh |
+| `?`, `q` | help, quit |
+
+The mouse works too: click to select, double-click to open, scroll to move.
 
 ### Legend
 

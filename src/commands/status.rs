@@ -70,8 +70,9 @@ fn card(target: &Target, dropbox: &Dropbox) {
 
     let tracking = match state {
         State::Tracked(_) => Mark::Tracked.with("tracked"),
-        State::Pending(_) => Mark::Pending
-            .with("tracked, but a rule says it should be ignored (run `di check`)"),
+        State::Pending(_) => {
+            Mark::Pending.with("tracked, but a rule says it should be ignored (run `di check`)")
+        }
         State::Ignored(Some(_)) => Mark::Ignored.with("ignored"),
         State::Ignored(None) => Mark::IgnoredManual.with("ignored, though no rule asks for it"),
         State::InsideIgnored(dir) => Mark::Ignored.with(format!(

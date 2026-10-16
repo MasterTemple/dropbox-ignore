@@ -7,7 +7,7 @@ use std::{
     fmt::Display,
     io::IsTerminal,
     path::{Component, Path, PathBuf},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
@@ -290,8 +290,29 @@ pub fn separator() -> String {
     })
 }
 
-/// Print a warning line to stderr.
+/// Warnings collected instead of printed, while a full-screen UI owns the terminal.
+static CAPTURED: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+/// Collect warnings for [`take_warnings`] instead of printing them.
+pub fn capture_warnings() {
+    *CAPTURED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Vec::new());
+}
+
+pub fn take_warnings() -> Vec<String> {
+    CAPTURED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_mut()
+        .map(std::mem::take)
+        .unwrap_or_default()
+}
+
+/// Print a warning line to stderr (or collect it, see [`capture_warnings`]).
 pub fn warn(msg: impl Display) {
+    if let Some(captured) = CAPTURED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        captured.push(msg.to_string());
+        return;
+    }
     eprintln!("{} {msg}", Mark::Warning.with("warning:"));
 }
 
