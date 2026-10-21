@@ -17,6 +17,7 @@ use commands::{
     check::CheckArgs,
     exclude::{ExcludeArgs, IncludeArgs},
     mark::MarkArgs,
+    open::OpenArgs,
     status::StatusArgs,
     tree::TreeArgs,
 };
@@ -40,6 +41,7 @@ Examples:
   di status target              Explain why a path is (not) synced
   di ignore node_modules        Stop syncing a folder right now
   di exclude Videos             Keep a folder in Dropbox but delete it here
+  di open notes.md              Show a file on dropbox.com
   di tui                        Browse and fix things interactively
 
 Rules use .gitignore syntax and can live in any folder inside Dropbox.";
@@ -89,6 +91,10 @@ enum Command {
     /// Download excluded folders to this computer again
     Include(IncludeArgs),
 
+    /// Open files or folders on dropbox.com in the browser
+    #[command(visible_alias = "web")]
+    Open(OpenArgs),
+
     /// Browse interactively: see sync status, ignore, unignore and edit rules
     Tui(TuiArgs),
 }
@@ -111,6 +117,7 @@ fn main() -> ExitCode {
         Command::Unignore(args) => commands::mark::run(args, false),
         Command::Exclude(args) => commands::exclude::exclude(args),
         Command::Include(args) => commands::exclude::include(args),
+        Command::Open(args) => commands::open::run(args),
         Command::Tui(args) => tui::run(args),
     };
 

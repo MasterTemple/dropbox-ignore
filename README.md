@@ -25,6 +25,7 @@ node_modules/
 | `unignore PATH...` | Syncs paths again. Warns you if a rule will re-ignore them on the next `check`. |
 | `exclude [PATH...]` | Makes folders online only through selective sync: Dropbox deletes them here and keeps them online. With no paths, lists excluded folders. Supports `--dry-run` and `--force`. |
 | `include PATH...` | Downloads excluded folders again. |
+| `open [PATH...]` (alias `web`) | Opens folders on dropbox.com in your browser; files open in Dropbox's previewer. Works for excluded (online only) folders too. `--print` prints the addresses instead. |
 | `tui [PATH]` | Opens an interactive browser for the tree, with live sync status, ignore/unignore, add-rule, editing and check. Press `?` for keys. |
 
 ```
@@ -89,6 +90,7 @@ refreshes every 1.5 seconds.
 | `a` | add an anchored rule (e.g. `/build/`) to the folder's `.dropboxignore` and ignore the entry |
 | `e` | edit the relevant `.dropboxignore` in `$VISUAL` / `$EDITOR`, then reload |
 | `c` | preview everything `check` would change, then apply it with `y` |
+| `o` | open the selected entry on dropbox.com |
 | `/`, `n`, `N` | find among visible entries |
 | `.`, `D`, `r` | toggle dotfiles, toggle details, refresh |
 | `?`, `q` | help, quit |

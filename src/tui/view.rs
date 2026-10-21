@@ -459,6 +459,12 @@ fn draw_details(frame: &mut Frame, app: &mut App, area: Rect) {
             _ => {}
         }
     }
+    if !matches!(
+        node.state,
+        State::Ignored(_) | State::InsideIgnored(_) | State::Outside
+    ) {
+        actions.push(("o", "open on dropbox.com"));
+    }
     actions.push(("e", "edit .dropboxignore"));
     for (k, text) in actions {
         lines.push(Line::from(vec![
@@ -564,6 +570,7 @@ fn draw_help(frame: &mut Frame) {
                 ("x", "exclude folder (online only) / restore"),
                 ("e", "edit the folder's .dropboxignore"),
                 ("c", "check: preview, then apply all rules"),
+                ("o", "open selected on dropbox.com"),
             ],
         ),
         (

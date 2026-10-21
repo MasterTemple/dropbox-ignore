@@ -421,6 +421,7 @@ impl App {
             KeyCode::Char('a') => self.propose_rule(),
             KeyCode::Char('x') => self.propose_exclude(),
             KeyCode::Char('e') => self.edit_rules(),
+            KeyCode::Char('o') => self.open_in_browser(),
             KeyCode::Char('c') => self.propose_check(),
             KeyCode::Char('r') => {
                 self.reload();
@@ -885,6 +886,31 @@ impl App {
                 }
                 Err(err) => self.notify(Mark::Error, format!("{err:#}")),
             },
+        }
+    }
+
+    /// Show the selected entry on dropbox.com.
+    fn open_in_browser(&mut self) {
+        let Some(node) = self.selected_node().cloned() else {
+            return;
+        };
+        if matches!(node.state, State::Ignored(_) | State::InsideIgnored(_)) {
+            self.notify(
+                Mark::Ignored,
+                format!("{} is ignored, so it isn't on dropbox.com", node.name),
+            );
+            return;
+        }
+        let result = self
+            .dropbox
+            .web_url(&node.path, node.kind.is_dir())
+            .and_then(|url| dropbox::open_in_browser(&url));
+        match result {
+            Ok(()) => self.notify(
+                Mark::Success,
+                format!("Opened {} on dropbox.com", node.name),
+            ),
+            Err(err) => self.notify(Mark::Error, format!("{err:#}")),
         }
     }
 

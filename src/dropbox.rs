@@ -127,9 +127,16 @@ impl Daemon {
     }
 }
 
+/// A linked account's Dropbox folder.
+struct Root {
+    path: PathBuf,
+    /// Business (team) account rather than personal
+    work: bool,
+}
+
 /// The Dropbox environment: account roots plus an optional daemon connection.
 pub struct Dropbox {
-    roots: Vec<PathBuf>,
+    roots: Vec<Root>,
     daemon: Option<Daemon>,
     /// Folders excluded through selective sync, fetched on first use
     excluded: Option<Vec<PathBuf>>,
@@ -160,10 +167,37 @@ impl Dropbox {
 
     /// The Dropbox folder containing `path`, if any.
     pub fn root_of(&self, path: &Path) -> Option<&Path> {
-        self.roots
-            .iter()
-            .find(|root| path.starts_with(root))
-            .map(PathBuf::as_path)
+        self.root_entry(path).map(|root| root.path.as_path())
+    }
+
+    fn root_entry(&self, path: &Path) -> Option<&Root> {
+        self.roots.iter().find(|root| path.starts_with(&root.path))
+    }
+
+    /// The dropbox.com address showing `path`: the folder itself, or a file's
+    /// folder with the file open in the previewer.
+    pub fn web_url(&self, path: &Path, is_dir: bool) -> Result<String> {
+        let root = self
+            .root_entry(path)
+            .ok_or_else(|| anyhow!("{} is not inside a Dropbox folder", path.display()))?;
+        let relative = path.strip_prefix(&root.path).unwrap_or(path);
+        let (folder, preview) = match (is_dir, relative.parent(), relative.file_name()) {
+            (false, Some(parent), Some(name)) => (parent, Some(name)),
+            _ => (relative, None),
+        };
+
+        let mut url = String::from("https://www.dropbox.com/home");
+        for part in folder.components() {
+            url.push('/');
+            url.push_str(&url_encode(&part.as_os_str().to_string_lossy()));
+        }
+        // with both accounts signed in, the role picks the right one
+        let role = if root.work { "work" } else { "personal" };
+        url.push_str(&format!("?role={role}"));
+        if let Some(name) = preview {
+            url.push_str(&format!("&preview={}", url_encode(&name.to_string_lossy())));
+        }
+        Ok(url)
     }
 
     /// The nearest strict ancestor of `path` (inside its Dropbox folder) that is ignored.
@@ -312,8 +346,39 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+/// Open `url` in the default browser without waiting for it.
+pub fn open_in_browser(url: &str) -> Result<()> {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .with_context(|| format!("could not run `{opener}` to open the browser"))?;
+    Ok(())
+}
+
+/// Percent-encode one URL path segment or query value.
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 /// Dropbox folders (personal and business) from `~/.dropbox/info.json`.
-fn account_roots() -> Vec<PathBuf> {
+fn account_roots() -> Vec<Root> {
     let Some(info) =
         home().and_then(|h| std::fs::read_to_string(h.join(".dropbox/info.json")).ok())
     else {
@@ -323,8 +388,13 @@ fn account_roots() -> Vec<PathBuf> {
         return Vec::new();
     };
     accounts
-        .values()
-        .filter_map(|account| account.get("path")?.as_str())
-        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p)))
+        .iter()
+        .filter_map(|(kind, account)| {
+            let path = account.get("path")?.as_str()?;
+            Some(Root {
+                path: std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)),
+                work: kind == "business",
+            })
+        })
         .collect()
 }
