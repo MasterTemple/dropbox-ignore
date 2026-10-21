@@ -79,6 +79,7 @@ fn card(target: &Target, dropbox: &Dropbox) {
             "untracked, inside ignored folder {}",
             ui::tilde(dir)
         )),
+        State::Excluded => Mark::Excluded.with("excluded by selective sync: online only"),
         State::Outside => Mark::Outside.with("not inside a Dropbox folder"),
     };
     row("Tracking", tracking);

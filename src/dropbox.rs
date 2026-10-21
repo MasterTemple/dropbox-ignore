@@ -1,6 +1,7 @@
 //! Everything that talks to Dropbox: the `com.dropbox.ignored` extended attribute,
 //! the account folders listed in `~/.dropbox/info.json`, and the running daemon's
-//! local command socket (the same one the official `dropbox filestatus` CLI uses).
+//! local command socket (the same one the official `dropbox filestatus` and
+//! `dropbox exclude` CLI commands use).
 
 use std::{
     collections::HashMap,
@@ -10,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 
 const XATTR_IGNORED: &str = "user.com.dropbox.ignored";
 
@@ -112,6 +113,11 @@ impl Daemon {
         })
     }
 
+    /// Change how long to wait for replies; `None` waits forever.
+    fn set_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.writer.set_read_timeout(timeout)
+    }
+
     fn read_line(&mut self) -> std::io::Result<String> {
         let mut line = String::new();
         if self.reader.read_line(&mut line)? == 0 {
@@ -125,6 +131,8 @@ impl Daemon {
 pub struct Dropbox {
     roots: Vec<PathBuf>,
     daemon: Option<Daemon>,
+    /// Folders excluded through selective sync, fetched on first use
+    excluded: Option<Vec<PathBuf>>,
 }
 
 impl Dropbox {
@@ -137,6 +145,7 @@ impl Dropbox {
             } else {
                 None
             },
+            excluded: None,
         }
     }
 
@@ -191,6 +200,77 @@ impl Dropbox {
             .unwrap_or(SyncStatus::Unknown)
     }
 
+    /// Folders excluded through selective sync. They no longer exist on disk.
+    /// Empty when the daemon isn't reachable.
+    pub fn excluded(&mut self) -> &[PathBuf] {
+        if self.excluded.is_none() {
+            let list = self
+                .ask("get_ignore_set", &[])
+                .and_then(|mut f| f.remove("ignore_set"))
+                .unwrap_or_default();
+            self.excluded = Some(list.into_iter().map(PathBuf::from).collect());
+        }
+        self.excluded.as_deref().unwrap_or_default()
+    }
+
+    pub fn is_excluded(&mut self, path: &Path) -> bool {
+        self.excluded().iter().any(|p| p == path)
+    }
+
+    /// The nearest strict ancestor of `path` that is excluded through selective sync.
+    pub fn excluded_ancestor(&mut self, path: &Path) -> Option<PathBuf> {
+        let excluded = self.excluded();
+        path.ancestors()
+            .skip(1)
+            .find(|a| excluded.iter().any(|p| p == a))
+            .map(Path::to_path_buf)
+    }
+
+    /// Exclude folders through selective sync: Dropbox deletes the local copies but
+    /// keeps them online. Returns the folders Dropbox reports as newly excluded.
+    pub fn exclude(&mut self, folders: &[PathBuf]) -> Result<Vec<PathBuf>> {
+        self.change_excluded("ignore_set_add", "ignored", folders)
+    }
+
+    /// Undo [`Dropbox::exclude`]: Dropbox downloads the folders again. Returns the
+    /// folders Dropbox reports as no longer excluded.
+    pub fn include(&mut self, folders: &[PathBuf]) -> Result<Vec<PathBuf>> {
+        self.change_excluded("ignore_set_remove", "removed", folders)
+    }
+
+    fn change_excluded(
+        &mut self,
+        command: &str,
+        reply_key: &str,
+        folders: &[PathBuf],
+    ) -> Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        for folder in folders {
+            match folder.to_str() {
+                Some(p) if !p.contains(['\t', '\n']) => paths.push(p),
+                _ => bail!("Dropbox can't be sent the path {}", folder.display()),
+            }
+        }
+        self.excluded = None;
+        let daemon = self
+            .daemon
+            .as_mut()
+            .ok_or_else(|| anyhow!("the Dropbox daemon isn't running or reachable"))?;
+        // Dropbox answers once it has updated its sync state, which can take a while
+        daemon.set_timeout(None)?;
+        let reply = daemon.command(command, &[("paths", &paths.join("\t"))]);
+        daemon.set_timeout(Some(Duration::from_secs(3)))?;
+        let fields = reply
+            .context("lost the connection to the Dropbox daemon")?
+            .map_err(|message| anyhow!("Dropbox refused: {message}"))?;
+        Ok(fields
+            .get(reply_key)
+            .into_iter()
+            .flatten()
+            .map(PathBuf::from)
+            .collect())
+    }
+
     fn ask(&mut self, name: &str, args: &[(&str, &str)]) -> Option<HashMap<String, Vec<String>>> {
         let daemon = self.daemon.as_mut()?;
         match daemon.command(name, args) {
@@ -202,6 +282,30 @@ impl Dropbox {
             }
         }
     }
+}
+
+/// Ignored files and folders inside `dir` (not below ignored folders). They exist
+/// only on this computer, so excluding `dir` would lose them. Stops after `limit`.
+pub fn ignored_within(dir: &Path, limit: usize) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if is_ignored(&path) {
+                found.push(path);
+                if found.len() >= limit {
+                    return found;
+                }
+            } else if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                stack.push(path);
+            }
+        }
+    }
+    found
 }
 
 fn home() -> Option<PathBuf> {

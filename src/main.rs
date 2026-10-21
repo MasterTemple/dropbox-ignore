@@ -13,7 +13,13 @@ use clap::{
     builder::styling::{AnsiColor, Effects, Styles},
 };
 
-use commands::{check::CheckArgs, mark::MarkArgs, status::StatusArgs, tree::TreeArgs};
+use commands::{
+    check::CheckArgs,
+    exclude::{ExcludeArgs, IncludeArgs},
+    mark::MarkArgs,
+    status::StatusArgs,
+    tree::TreeArgs,
+};
 use tui::TuiArgs;
 use ui::{ColorChoice, IconSet};
 
@@ -33,6 +39,7 @@ Examples:
   di tree -L 2                  Show what Dropbox syncs in this folder
   di status target              Explain why a path is (not) synced
   di ignore node_modules        Stop syncing a folder right now
+  di exclude Videos             Keep a folder in Dropbox but delete it here
   di tui                        Browse and fix things interactively
 
 Rules use .gitignore syntax and can live in any folder inside Dropbox.";
@@ -76,6 +83,12 @@ enum Command {
     /// Resume syncing files or folders
     Unignore(MarkArgs),
 
+    /// Make folders online only: delete them here, keep them in Dropbox (selective sync)
+    Exclude(ExcludeArgs),
+
+    /// Download excluded folders to this computer again
+    Include(IncludeArgs),
+
     /// Browse interactively: see sync status, ignore, unignore and edit rules
     Tui(TuiArgs),
 }
@@ -96,6 +109,8 @@ fn main() -> ExitCode {
         Command::Status(args) => commands::status::run(args),
         Command::Ignore(args) => commands::mark::run(args, true),
         Command::Unignore(args) => commands::mark::run(args, false),
+        Command::Exclude(args) => commands::exclude::exclude(args),
+        Command::Include(args) => commands::exclude::include(args),
         Command::Tui(args) => tui::run(args),
     };
 

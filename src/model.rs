@@ -22,6 +22,8 @@ pub enum State {
     Ignored(Option<Rule>),
     /// Untracked because this ancestor folder is ignored
     InsideIgnored(PathBuf),
+    /// Excluded through selective sync: kept in Dropbox, gone from this computer
+    Excluded,
     /// Not inside any Dropbox folder
     Outside,
 }
@@ -53,6 +55,7 @@ impl State {
             State::Pending(_) => Mark::Pending,
             State::Ignored(Some(_)) | State::InsideIgnored(_) => Mark::Ignored,
             State::Ignored(None) => Mark::IgnoredManual,
+            State::Excluded => Mark::Excluded,
             State::Outside => Mark::Outside,
         }
     }
@@ -81,6 +84,7 @@ impl State {
                 ui::paint("untracked", mark.style()),
                 ui::dim(format!("inside ignored {}", ui::tilde(dir)))
             ),
+            State::Excluded => ui::paint("online only (excluded)", mark.style()),
             State::Outside => ui::paint("not in Dropbox", mark.style()),
         };
         Some(text)
@@ -240,6 +244,35 @@ pub fn list_children(
             path,
             kind,
             state,
+        });
+    }
+
+    // excluded folders are deleted locally, so list them from the daemon
+    let excluded: Vec<PathBuf> = dropbox
+        .excluded()
+        .iter()
+        .filter(|p| p.parent() == Some(dir))
+        .cloned()
+        .collect();
+    for path in excluded {
+        if let Some(node) = nodes.iter_mut().find(|n| n.path == path) {
+            // still on disk while Dropbox removes it
+            node.state = State::Excluded;
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if !filter.allows(&name, &Kind::Dir) {
+            filtered += 1;
+            continue;
+        }
+        nodes.push(Node {
+            name,
+            path,
+            kind: Kind::Dir,
+            state: State::Excluded,
         });
     }
     nodes.sort_by_cached_key(|n| (!n.kind.is_dir(), n.name.to_lowercase()));

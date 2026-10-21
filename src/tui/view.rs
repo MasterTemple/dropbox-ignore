@@ -300,6 +300,7 @@ fn label_spans(state: &State, base: &Path) -> Vec<Span<'static>> {
             tag("untracked"),
             muted(format!(" inside {}", ui::tilde(dir))),
         ],
+        State::Excluded => vec![tag("online only (excluded)")],
         State::Outside => vec![tag("not in Dropbox")],
     }
 }
@@ -370,6 +371,7 @@ fn draw_details(frame: &mut Frame, app: &mut App, area: Rect) {
         State::Ignored(Some(_)) => "ignored by rule".into(),
         State::Ignored(None) => "ignored manually (no rule)".into(),
         State::InsideIgnored(dir) => format!("untracked, inside {}", ui::tilde(dir)),
+        State::Excluded => "online only: excluded by selective sync".into(),
         State::Outside => "not inside Dropbox".into(),
     };
     let tracking_mark = if node.state.is_tracked() && mark != Mark::Pending {
@@ -440,7 +442,11 @@ fn draw_details(frame: &mut Frame, app: &mut App, area: Rect) {
             State::Tracked(_) => {
                 actions.push(("i", "ignore now"));
                 actions.push(("a", "add rule + ignore"));
+                if node.kind.is_dir() {
+                    actions.push(("x", "exclude (online only)"));
+                }
             }
+            State::Excluded => actions.push(("x", "download again")),
             State::Pending(_) => {
                 actions.push(("c", "apply rules (check)"));
                 actions.push(("i", "ignore just this"));
@@ -490,6 +496,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             ("i", "ignore"),
             ("u", "unignore"),
             ("a", "add rule"),
+            ("x", "exclude"),
             ("c", "check"),
             ("e", "edit"),
             ("/", "find"),
@@ -554,6 +561,7 @@ fn draw_help(frame: &mut Frame) {
                 ("i", "ignore selected now"),
                 ("u", "unignore selected"),
                 ("a", "add rule for selected + ignore"),
+                ("x", "exclude folder (online only) / restore"),
                 ("e", "edit the folder's .dropboxignore"),
                 ("c", "check: preview, then apply all rules"),
             ],
@@ -704,6 +712,9 @@ fn draw_plan(frame: &mut Frame, app: &App) {
         format!("{} to ignore", ui::plural(ignore, "item", "items")),
         color(Mark::Ignored),
     )];
+    if ignore > 0 {
+        text.push(muted(" · deleted from dropbox.com and other computers"));
+    }
     if unmatched > 0 {
         text.push(muted(format!(
             " · {} ignored without a rule (left alone)",

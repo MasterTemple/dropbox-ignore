@@ -1,6 +1,9 @@
 //! `ignore` and `unignore`: set or clear the ignore flag by hand.
 
-use std::path::{Path, PathBuf};
+use std::{
+    io::{BufRead, IsTerminal, Write},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -25,6 +28,10 @@ pub struct MarkArgs {
     /// Show what would change without touching anything
     #[arg(short = 'n', long)]
     dry_run: bool,
+
+    /// Ignore paths already in Dropbox without asking (Dropbox deletes them online)
+    #[arg(short, long)]
+    yes: bool,
 }
 
 pub fn run(args: MarkArgs, ignore: bool) -> Result<()> {
@@ -61,6 +68,22 @@ fn mark(input: &Path, ignore: bool, args: &MarkArgs, dropbox: &Dropbox) -> Resul
     }
 
     let changed_self = dropbox::is_ignored(&path) != ignore;
+    if ignore && changed_self && in_dropbox(&path, dropbox) && !args.yes {
+        let warning = format!(
+            "{shown} is in Dropbox: ignoring it deletes it from dropbox.com and your \
+             other computers (this copy stays)"
+        );
+        if args.dry_run {
+            note(warning);
+        } else if !confirm(&warning, kind.is_dir())? {
+            println!(
+                "{} {} {shown}",
+                ui::dim("·"),
+                ui::dim(format!("{:<14}", "left synced"))
+            );
+            return Ok(());
+        }
+    }
     if changed_self && !args.dry_run {
         dropbox::set_ignored(&path, ignore)?;
     }
@@ -136,6 +159,29 @@ fn mark(input: &Path, ignore: bool, args: &MarkArgs, dropbox: &Dropbox) -> Resul
         }
     }
     Ok(())
+}
+
+/// Whether Dropbox holds `path` online, so ignoring it deletes the online copy.
+fn in_dropbox(path: &Path, dropbox: &Dropbox) -> bool {
+    dropbox
+        .root_of(path)
+        .is_some_and(|root| root != path && dropbox.ignored_ancestor(path).is_none())
+}
+
+/// Ask before deleting something online. Without a terminal to ask on, refuse.
+fn confirm(warning: &str, is_dir: bool) -> Result<bool> {
+    note(warning.to_string());
+    if is_dir {
+        note("to keep it online but remove it here, use `di exclude` instead".into());
+    }
+    if !std::io::stdin().is_terminal() {
+        bail!("not ignoring without confirmation; pass --yes to ignore anyway");
+    }
+    print!("  Ignore it anyway? [y/N] ");
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
 }
 
 fn note(text: String) {

@@ -15,7 +15,7 @@ use ratatui::{
 };
 
 use crate::{
-    dropbox::{self, Dropbox},
+    dropbox::{self, Dropbox, SyncStatus},
     model::{Filter, Node, State, Target, list_children},
     plan::{Action, Plan},
     rules::{self, Rules, Verdict},
@@ -75,6 +75,9 @@ pub enum Confirmed {
         pattern: String,
         target: PathBuf,
     },
+    Ignore(Node),
+    Exclude(PathBuf),
+    Include(PathBuf),
 }
 
 pub struct Flash {
@@ -296,7 +299,8 @@ impl App {
             let Some(node) = self.rows[i].node() else {
                 continue;
             };
-            if node.path == self.root.path {
+            // excluded folders aren't on disk; their state only changes through `x`
+            if node.path == self.root.path || matches!(node.state, State::Excluded) {
                 continue;
             }
             let (path, is_dir, was_tracked) = (
@@ -415,6 +419,7 @@ impl App {
             KeyCode::Char('i') => self.ignore_selected(),
             KeyCode::Char('u') => self.unignore_selected(),
             KeyCode::Char('a') => self.propose_rule(),
+            KeyCode::Char('x') => self.propose_exclude(),
             KeyCode::Char('e') => self.edit_rules(),
             KeyCode::Char('c') => self.propose_check(),
             KeyCode::Char('r') => {
@@ -552,6 +557,11 @@ impl App {
         } else if expandable(node) {
             self.expanded.insert(node.path.clone());
             self.rebuild();
+        } else if matches!(node.state, State::Excluded) {
+            self.notify(
+                Mark::Excluded,
+                "Online only: not on this computer (press x to download it again)",
+            );
         } else if node.kind.is_dir() {
             self.notify(
                 Mark::Ignored,
@@ -614,10 +624,35 @@ impl App {
         let Some(node) = self.selected_child() else {
             return;
         };
+        if matches!(node.state, State::Excluded) {
+            self.notify(
+                Mark::Excluded,
+                format!(
+                    "{} is online only, so there is nothing here to ignore",
+                    node.name
+                ),
+            );
+            return;
+        }
         if !node.state.is_tracked() {
             self.notify(Mark::Ignored, format!("{} is already ignored", node.name));
             return;
         }
+        if self.dropbox.root_of(&node.path).is_none() {
+            self.ignore(node);
+            return;
+        }
+        let shown = ui::pretty_path(&node.path, Some(&self.root.path));
+        let mut lines = vec![format!("Ignore  {shown}"), String::new()];
+        lines.extend(online_warning(&node));
+        self.modal = Some(Modal::Confirm {
+            title: "Ignore".into(),
+            lines,
+            on_yes: Confirmed::Ignore(node),
+        });
+    }
+
+    fn ignore(&mut self, node: Node) {
         match dropbox::set_ignored(&node.path, true) {
             Ok(()) => {
                 let hint = if matches!(node.state, State::Pending(_)) {
@@ -672,6 +707,16 @@ impl App {
         let Some(node) = self.selected_child() else {
             return;
         };
+        if matches!(node.state, State::Excluded) {
+            self.notify(
+                Mark::Excluded,
+                format!(
+                    "{} is online only; rules only affect local files",
+                    node.name
+                ),
+            );
+            return;
+        }
         let Some(parent) = node.path.parent() else {
             return;
         };
@@ -689,8 +734,9 @@ impl App {
             lines.push(String::new());
             lines.push("It is already ignored; the rule keeps it that way.".into());
         } else {
-            lines.push(String::new());
             lines.push("and ignore it right away.".into());
+            lines.push(String::new());
+            lines.extend(online_warning(&node));
         }
         self.modal = Some(Modal::Confirm {
             title: "Add ignore rule".into(),
@@ -703,8 +749,121 @@ impl App {
         });
     }
 
+    /// Offer to exclude the selected folder (online only), or to download an
+    /// excluded one again.
+    fn propose_exclude(&mut self) {
+        let Some(node) = self.selected_child() else {
+            return;
+        };
+        let shown = ui::pretty_path(&node.path, Some(&self.root.path));
+        if matches!(node.state, State::Excluded) {
+            self.modal = Some(Modal::Confirm {
+                title: "Download folder".into(),
+                lines: vec![
+                    format!("Include  {shown}/"),
+                    String::new(),
+                    "Dropbox will download it to this computer again.".into(),
+                ],
+                on_yes: Confirmed::Include(node.path),
+            });
+            return;
+        }
+        if !self.dropbox.daemon_connected() {
+            self.notify(
+                Mark::Error,
+                "Excluding needs the Dropbox daemon, which isn't reachable",
+            );
+            return;
+        }
+        if !node.kind.is_dir() {
+            self.notify(
+                Mark::Warning,
+                "Only folders can be excluded; Dropbox on Linux can't make single files online only",
+            );
+            return;
+        }
+        if !node.state.is_tracked() {
+            self.notify(
+                Mark::Warning,
+                format!(
+                    "{} isn't in Dropbox, so excluding it would delete it for good",
+                    node.name
+                ),
+            );
+            return;
+        }
+        if !matches!(node.state, State::Tracked(SyncStatus::UpToDate)) {
+            self.notify(
+                Mark::Warning,
+                format!(
+                    "Wait until {} is fully synced, so nothing is lost when it's removed here",
+                    node.name
+                ),
+            );
+            return;
+        }
+        let local = dropbox::ignored_within(&node.path, 4);
+        if !local.is_empty() {
+            let more = if local.len() >= 4 { ", …" } else { "" };
+            let names: Vec<String> = local
+                .iter()
+                .take(3)
+                .map(|p| ui::pretty_path(p, Some(&node.path)))
+                .collect();
+            self.notify(
+                Mark::Warning,
+                format!(
+                    "Can't exclude: ignored items inside exist only here ({}{more})",
+                    names.join(", ")
+                ),
+            );
+            return;
+        }
+        self.modal = Some(Modal::Confirm {
+            title: "Exclude folder".into(),
+            lines: vec![
+                format!("Exclude  {shown}/"),
+                String::new(),
+                "Dropbox will delete it from this computer and keep it online.".into(),
+                "Press x on it again (or `di include`) to download it back.".into(),
+            ],
+            on_yes: Confirmed::Exclude(node.path),
+        });
+    }
+
+    fn change_excluded(&mut self, path: PathBuf, exclude: bool) {
+        let folders = [path.clone()];
+        let result = if exclude {
+            self.dropbox.exclude(&folders)
+        } else {
+            self.dropbox.include(&folders)
+        };
+        let name = ui::pretty_path(&path, Some(&self.root.path));
+        match result {
+            Ok(changed) if changed.contains(&path) => {
+                if exclude {
+                    self.notify(
+                        Mark::Excluded,
+                        format!("Excluded {name}: removed here, kept in Dropbox"),
+                    );
+                } else {
+                    self.notify(
+                        Mark::Restored,
+                        format!("Included {name}; Dropbox is downloading it"),
+                    );
+                }
+            }
+            Ok(_) => self.notify(Mark::Warning, format!("Dropbox left {name} unchanged")),
+            Err(err) => self.notify(Mark::Error, format!("{err:#}")),
+        }
+        self.reload_parent(&path);
+    }
+
     fn confirmed(&mut self, action: Confirmed) {
         match action {
+            Confirmed::Ignore(node) => self.ignore(node),
+            Confirmed::Exclude(path) => self.change_excluded(path, true),
+            Confirmed::Include(path) => self.change_excluded(path, false),
             Confirmed::AddRule {
                 file,
                 pattern,
@@ -787,6 +946,19 @@ impl App {
             );
         }
     }
+}
+
+/// Lines explaining that ignoring a synced entry deletes it online.
+fn online_warning(node: &Node) -> Vec<String> {
+    let mut lines = vec![
+        "It's in Dropbox, so Dropbox will delete it from".into(),
+        "dropbox.com and your other computers. This copy stays.".into(),
+    ];
+    if node.kind.is_dir() {
+        lines.push(String::new());
+        lines.push("To keep it online but remove it here, press x instead.".into());
+    }
+    lines
 }
 
 /// Whether a node is a folder the tree may open.
