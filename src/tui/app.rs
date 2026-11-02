@@ -803,7 +803,8 @@ impl App {
             );
             return;
         }
-        let local = dropbox::ignored_within(&node.path, 4);
+        let top = self.dropbox.root_of(&node.path).map(Path::to_path_buf);
+        let local = dropbox::ignored_within(&node.path, top.as_deref(), 4);
         if !local.is_empty() {
             let more = if local.len() >= 4 { ", …" } else { "" };
             let names: Vec<String> = local
@@ -814,7 +815,7 @@ impl App {
             self.notify(
                 Mark::Warning,
                 format!(
-                    "Can't exclude: ignored items inside exist only here ({}{more})",
+                    "Can't exclude: items ignored by hand inside exist only here ({}{more})",
                     names.join(", ")
                 ),
             );

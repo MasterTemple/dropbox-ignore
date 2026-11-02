@@ -13,6 +13,8 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::rules::Rules;
+
 const XATTR_IGNORED: &str = "user.com.dropbox.ignored";
 
 /// Whether the ignore attribute is set on `path` itself (not its ancestors).
@@ -318,24 +320,32 @@ impl Dropbox {
     }
 }
 
-/// Ignored files and folders inside `dir` (not below ignored folders). They exist
-/// only on this computer, so excluding `dir` would lose them. Stops after `limit`.
-pub fn ignored_within(dir: &Path, limit: usize) -> Vec<PathBuf> {
+/// Ignored files and folders inside `dir` (not below ignored folders) that no
+/// `.dropboxignore` rule asks for. They exist only on this computer and nothing
+/// regenerates them, so excluding `dir` would lose them. Items a rule ignores are
+/// left out: those are build output and the like. `top` is the Dropbox folder, so
+/// rules from above `dir` apply. Stops after `limit`.
+pub fn ignored_within(dir: &Path, top: Option<&Path>, limit: usize) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
+    let mut stack = vec![(dir.to_path_buf(), Rules::for_dir(dir, top))];
+    while let Some((dir, rules)) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
             let path = entry.path();
+            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
             if is_ignored(&path) {
+                if rules.check(&path, is_dir).should_ignore() {
+                    continue;
+                }
                 found.push(path);
                 if found.len() >= limit {
                     return found;
                 }
-            } else if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                stack.push(path);
+            } else if is_dir {
+                let rules = rules.descend(&path);
+                stack.push((path, rules));
             }
         }
     }

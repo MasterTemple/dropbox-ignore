@@ -61,8 +61,10 @@ write rules only for things that shouldn't be online at all.
 Use `ignore` for build output and other local junk. Use `exclude` to free space
 here for folders you still want in Dropbox. Only folders can be excluded, because
 the Linux client has no online-only files. `exclude` refuses folders that are still
-syncing and folders that are ignored or hold ignored items, because those exist only
-on this computer and would be deleted for good. `--force` skips those checks.
+syncing, folders that are ignored, and folders holding items ignored by hand (no
+`.dropboxignore` rule matches them), because those exist only on this computer and
+would be deleted for good. Items a rule ignores, like build output, don't block it:
+they're deleted along with the folder and can be rebuilt. `--force` skips those checks.
 Excluded folders still show up in `tree` and `tui`, marked "online only".
 
 ### Hiding entries

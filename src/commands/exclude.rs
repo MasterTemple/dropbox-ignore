@@ -20,7 +20,7 @@ pub struct ExcludeArgs {
     /// Folders to make online only; with none, list the excluded folders
     paths: Vec<PathBuf>,
 
-    /// Exclude even if the folder is still syncing or holds ignored items
+    /// Exclude even if the folder is still syncing or holds items ignored by hand
     /// (those exist only on this computer and will be deleted)
     #[arg(short, long)]
     force: bool,
@@ -110,7 +110,7 @@ fn check_exclude(
              (move the file into a folder and exclude that)"
         );
     }
-    let Some(root) = dropbox.root_of(&path) else {
+    let Some(root) = dropbox.root_of(&path).map(Path::to_path_buf) else {
         bail!("{shown} is not inside a Dropbox folder");
     };
     if root == path {
@@ -136,11 +136,11 @@ fn check_exclude(
             crate::model::sync_text(&status)
         ),
     }
-    let local = dropbox::ignored_within(&path, LOCAL_ONLY_SHOWN + 1);
+    let local = dropbox::ignored_within(&path, Some(&root), LOCAL_ONLY_SHOWN + 1);
     if !local.is_empty() {
         for item in local.iter().take(LOCAL_ONLY_SHOWN) {
             note(format!(
-                "ignored, only on this computer: {}",
+                "ignored by hand, only on this computer: {}",
                 ui::tilde(item)
             ));
         }
@@ -148,7 +148,8 @@ fn check_exclude(
             note("… and more".into());
         }
         bail!(
-            "{shown} holds ignored items that excluding would delete; move them out, or pass --force"
+            "{shown} holds items ignored by hand (no .dropboxignore rule) that excluding would delete; \
+             move them out, add a rule for them, or pass --force"
         );
     }
     Ok(Some(path))
